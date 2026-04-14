@@ -129,6 +129,7 @@ Optimal_Multi_algo_HP_dict = {
     'Time_RCD': {'win_size': 15000, 'batch_size': 64},
     'xLSTMAD': {'window_size': 50, 'lr': 0.001, 'embedding_dim': 40},
     'MMPAD': {'n_dim': 0.7, 'n_neighbor': 15},
+    'CHARM': {"window_size": 128, "k": 3, "pointwise_agg": "mean", "stride": 1, "train_stride": 1, "min_window": 64}
 }
 
 
@@ -308,4 +309,5 @@ Optimal_Uni_algo_HP_dict = {
                    'lr': 1e-4},
     'xLSTMAD': {'window_size': 50, 'lr': 0.001, 'embedding_dim': 40},
     'MMPAD': {'n_neighbor': 5},
+    'CHARM': {"window_size": 128, "k": 3, "pointwise_agg": "mean", "stride": 1, "train_stride": 1, "min_window": 64}
 }

@@ -1,13 +1,14 @@
 import math
 
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler
 
 from .utils.slidingWindows import find_length_rank
 
 Unsupervise_AD_Pool = ['FFT', 'SR', 'NORMA', 'Series2Graph', 'Sub_IForest', 'IForest', 'LOF', 'Sub_LOF', 'POLY', 'MatrixProfile', 'Sub_PCA', 'PCA', 'HBOS',
                         'Sub_HBOS', 'KNN', 'Sub_KNN','KMeansAD', 'KMeansAD_U', 'KShapeAD', 'COPOD', 'CBLOF', 'COF', 'EIF', 'RobustPCA', 'MMPAD', 'Lag_Llama', 'TimesFM', 'Chronos', 'MOMENT_ZS', 'TSPulse_ZS', 'Time_RCD']
 Semisupervise_AD_Pool = ['Left_STAMPi', 'SAND', 'MCD', 'Sub_MCD', 'OCSVM', 'Sub_OCSVM', 'AutoEncoder', 'CNN', 'LSTMAD', 'TranAD', 'USAD', 'OmniAnomaly', 'PatchTST',
-                        'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD']
+                        'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD', 'CHARM']
 
 def run_Unsupervise_AD(model_name, data, **kwargs):
     try:
@@ -511,3 +512,31 @@ def run_MMPAD(data, periodicity=1, n_dim=None, n_neighbor=1,
     clf.fit(data)
     score = clf.decision_scores_
     return score.ravel()
+
+def run_CHARM(
+    data_train,
+    data_test,
+    window_size=128,
+    k=3,
+    pointwise_agg="mean",
+    stride=1,
+    train_stride=1,
+    min_window=64,
+):
+    from .models.CHARM import CHARM_AD
+    """Semisupervised runner — matches TSB-AD's run_Semisupervise_AD dispatcher."""
+    clf = CHARM_AD(
+        HP={},
+        window_size=window_size,
+        stride=stride,
+        k=k,
+        pointwise_agg=pointwise_agg,
+        train_stride=train_stride,
+        min_window=min_window,
+    )
+    clf.fit(data_train)
+    score = clf.decision_function(data_test)
+    score = (
+        MinMaxScaler(feature_range=(0, 1)).fit_transform(score.reshape(-1, 1)).ravel()
+    )
+    return score
