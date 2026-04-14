@@ -5,7 +5,7 @@ import numpy as np
 from .utils.slidingWindows import find_length_rank
 
 Unsupervise_AD_Pool = ['FFT', 'SR', 'NORMA', 'Series2Graph', 'Sub_IForest', 'IForest', 'LOF', 'Sub_LOF', 'POLY', 'MatrixProfile', 'Sub_PCA', 'PCA', 'HBOS',
-                        'Sub_HBOS', 'KNN', 'Sub_KNN','KMeansAD', 'KMeansAD_U', 'KShapeAD', 'COPOD', 'CBLOF', 'COF', 'EIF', 'RobustPCA', 'Lag_Llama', 'TimesFM', 'Chronos', 'MOMENT_ZS', 'TSPulse_ZS', 'MMPAD']
+                        'Sub_HBOS', 'KNN', 'Sub_KNN','KMeansAD', 'KMeansAD_U', 'KShapeAD', 'COPOD', 'CBLOF', 'COF', 'EIF', 'RobustPCA', 'MMPAD', 'Lag_Llama', 'TimesFM', 'Chronos', 'MOMENT_ZS', 'TSPulse_ZS', 'Time_RCD']
 Semisupervise_AD_Pool = ['Left_STAMPi', 'SAND', 'MCD', 'Sub_MCD', 'OCSVM', 'Sub_OCSVM', 'AutoEncoder', 'CNN', 'LSTMAD', 'TranAD', 'USAD', 'OmniAnomaly', 'PatchTST',
                         'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD']
 
@@ -380,6 +380,28 @@ def run_MOMENT_ZS(data, win_size=256):
     clf = MOMENT(win_size=win_size, input_c=data.shape[1])
 
     # Zero shot
+    clf.zero_shot(data)
+    score = clf.decision_scores_
+    return score.ravel()
+
+
+def run_Time_RCD(data,
+                 win_size=15000,
+                 batch_size=64,
+                 device=None,
+                 checkpoint=None,
+                 model_id="thu-sail-lab/Time-RCD",
+                 cache_dir=None):
+    from .models.Time_RCD import Time_RCD
+    clf = Time_RCD(
+        win_size=win_size,
+        input_c=data.shape[1],
+        batch_size=batch_size,
+        device=device,
+        checkpoint=checkpoint,
+        model_id=model_id,
+        cache_dir=cache_dir,
+    )
     clf.zero_shot(data)
     score = clf.decision_scores_
     return score.ravel()
