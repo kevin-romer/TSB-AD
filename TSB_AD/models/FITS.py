@@ -197,7 +197,7 @@ class FITS():
                 output, _ = self.model(x)
                 # loss = self.loss(output, target)
                 score = torch.mean(self.anomaly_criterion(output, target), dim=-1)
-                scores.append(score.cpu()[:,-1])
+                scores.append(score.mean(dim=1).cpu())
 
                 loop.set_description(f'Testing: ')
 

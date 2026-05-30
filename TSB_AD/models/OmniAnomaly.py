@@ -255,8 +255,9 @@ class OmniAnomaly(BaseDetector):
         self.__anomaly_score = scores
 
         if self.__anomaly_score.shape[0] < len(data):
-            self.__anomaly_score = np.array([self.__anomaly_score[0]]*math.ceil((self.win_size-1)/2) + 
-                        list(self.__anomaly_score) + [self.__anomaly_score[-1]]*((self.win_size-1)//2))
+            self.__anomaly_score = np.array(
+                [self.__anomaly_score[0]] * (self.win_size - 1) + list(self.__anomaly_score)
+            )
         
         return self.__anomaly_score
 

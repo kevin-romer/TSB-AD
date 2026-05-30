@@ -303,9 +303,9 @@ class TimesNet():
                 # criterion
                 score = torch.mean(self.anomaly_criterion(batch_x, outputs), dim=-1)
                 y_hat = torch.squeeze(outputs, -1)
-                
-                score = score.detach().cpu().numpy()[:, -1]
-                y_hat = y_hat.detach().cpu().numpy()[:, -1]
+
+                score = score.mean(dim=1).detach().cpu().numpy()
+                y_hat = y_hat.detach().cpu().numpy()[:, self.win_size // 2]
                 
                 attens_energy.append(score)
                 y_hats.append(y_hat)

@@ -167,7 +167,8 @@ class OCSVM(BaseDetector):
 
         # validate inputs X and y (optional)
         X = check_array(X)
-        X = MinMaxScaler(feature_range=(0,1)).fit_transform(X.T).T
+        self.scaler_ = MinMaxScaler(feature_range=(0, 1)).fit(X.T)
+        X = self.scaler_.transform(X.T).T
 
         self._set_n_classes(y)
 
@@ -208,18 +209,21 @@ class OCSVM(BaseDetector):
         anomaly_scores : numpy array of shape (n_samples,)
             The anomaly score of the input samples.
         """
-        check_is_fitted(self, ['decision_scores_', 'threshold_', 'labels_'])
+        check_is_fitted(self, ['decision_scores_', 'threshold_', 'labels_', 'scaler_'])
 
         n_samples, n_features = X.shape
 
         # Converting time series data into matrix format
         X = Window(window = self.slidingWindow).convert(X)
-        if self.normalize: 
+        if self.normalize:
             if n_features == 1:
                 X = zscore(X, axis=0, ddof=0)
-            else: 
+            else:
                 X = zscore(X, axis=1, ddof=1)
-                
+
+        X = check_array(X)
+        X = self.scaler_.transform(X.T).T
+
         # invert outlier scores. Outliers comes with higher outlier scores
         decision_scores_ = invert_order(self.detector_.decision_function(X))
         # padded decision_scores_

@@ -40,9 +40,6 @@ class InnerAutoencoder(nn.Module):
         self.layers_neurons_encoder_ = [self.n_features, *hidden_neurons]
         self.layers_neurons_decoder_ = self.layers_neurons_encoder_[::-1]
 
-        # get the object for the activations functions
-        self.activation = get_activation_by_name(hidden_activation)
-
         # initialize encoder and decoder as a sequential
         self.encoder = nn.Sequential()
         self.decoder = nn.Sequential()
@@ -60,15 +57,16 @@ class InnerAutoencoder(nn.Module):
                 self.encoder.add_module("batch_norm" + str(idx),
                                         nn.BatchNorm1d(self.layers_neurons_encoder_[idx + 1]))
 
-            # create the activation
+            # create a fresh activation instance per layer to avoid shared state
             self.encoder.add_module(self.hidden_activation + str(idx),
-                                    self.activation)
+                                    get_activation_by_name(hidden_activation))
 
             # create a dropout layer
             self.encoder.add_module("dropout" + str(idx),
                                     torch.nn.Dropout(dropout_rate))
 
         # fill the decoder layer
+        n_decoder_layers = len(self.layers_neurons_decoder_[:-1])
         for idx, layer in enumerate(self.layers_neurons_decoder_[:-1]):
 
             # create a linear layer of neurons
@@ -78,16 +76,17 @@ class InnerAutoencoder(nn.Module):
 
             # create a batch norm per layer if wanted (only if it is not the
             # last layer)
-            if batch_norm and idx < len(self.layers_neurons_decoder_[:-1]) - 1:
+            if batch_norm and idx < n_decoder_layers - 1:
                 self.decoder.add_module("batch_norm" + str(idx),
                                         nn.BatchNorm1d(self.layers_neurons_decoder_[idx + 1]))
 
-            # create the activation
-            self.decoder.add_module(self.hidden_activation + str(idx),
-                                    self.activation)
+            # skip activation on the output layer so reconstructions are unbounded
+            if idx < n_decoder_layers - 1:
+                self.decoder.add_module(self.hidden_activation + str(idx),
+                                        get_activation_by_name(hidden_activation))
 
             # create a dropout layer (only if it is not the last layer)
-            if idx < len(self.layers_neurons_decoder_[:-1]) - 1:
+            if idx < n_decoder_layers - 1:
                 self.decoder.add_module("dropout" + str(idx),
                                         torch.nn.Dropout(dropout_rate))
 
@@ -272,24 +271,27 @@ class AutoEncoder(BaseDetector):
         """
         n_samples, n_features = X.shape
 
-        if n_features == 1: 
+        if n_features == 1:
             # Converting time series data into matrix format
-            X = Window(window = self.slidingWindow).convert(X)
+            X_windowed = Window(window = self.slidingWindow).convert(X)
+        else:
+            X_windowed = X
 
         # validate inputs X and y (optional)
-        X = check_array(X)
+        X_windowed = check_array(X_windowed)
         self._set_n_classes(y)
 
-        n_samples, n_features = X.shape[0], X.shape[1]
-        X = MinMaxScaler(feature_range=(0,1)).fit_transform(X.T).T
+        n_features = X_windowed.shape[1]
+        self.scaler = MinMaxScaler(feature_range=(0,1)).fit(X_windowed.T)
+        X_windowed = self.scaler.transform(X_windowed.T).T
 
         # conduct standardization if needed
         if self.preprocessing:
-            self.mean, self.std = np.mean(X, axis=0), np.std(X, axis=0)
+            self.mean, self.std = np.mean(X_windowed, axis=0), np.std(X_windowed, axis=0)
             self.std = np.where(self.std == 0, 1e-8, self.std)
-            train_set = TSDataset(X=X, mean=self.mean, std=self.std)
+            train_set = TSDataset(X=X_windowed, mean=self.mean, std=self.std)
         else:
-            train_set = TSDataset(X=X)
+            train_set = TSDataset(X=X_windowed)
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=self.batch_size, shuffle=True, drop_last=True)
 
@@ -334,7 +336,7 @@ class AutoEncoder(BaseDetector):
             overall_loss = []
             for data, data_idx in train_loader:
                 data = data.to(self.device).float()
-                loss = self.loss_fn(data, self.model(data))
+                loss = self.loss_fn(self.model(data), data)
 
                 self.model.zero_grad()
                 loss.backward()
@@ -368,7 +370,7 @@ class AutoEncoder(BaseDetector):
         anomaly_scores : numpy array of shape (n_samples,)
             The anomaly score of the input samples.
         """
-        check_is_fitted(self, ['model', 'best_model_dict'])
+        check_is_fitted(self, ['model', 'best_model_dict', 'scaler'])
 
         n_samples, n_features = X.shape
 
@@ -377,7 +379,7 @@ class AutoEncoder(BaseDetector):
             X = Window(window = self.slidingWindow).convert(X)
 
         X = check_array(X)
-        X = MinMaxScaler(feature_range=(0,1)).fit_transform(X.T).T
+        X = self.scaler.transform(X.T).T
 
         # note the shuffle may be true but should be False
         if self.preprocessing:

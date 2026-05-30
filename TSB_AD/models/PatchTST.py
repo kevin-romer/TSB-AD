@@ -450,12 +450,13 @@ class PatchTST:
                 batch_x = batch_x.float().to(self.device)
                 outputs = self.model(batch_x)
 
-                # [B, L, D] -> mean over features => [B, L]
+                # [B, L, D] -> mean over features -> mean over time => [B]
                 score = torch.mean(self.anomaly_criterion(batch_x, outputs), dim=-1)
+                last_score = score.mean(dim=1).detach().cpu().numpy()  # [B]
 
-                # keep last timestep reconstruction
-                last_score = score[:, -1].detach().cpu().numpy()  # [B]
-                last_pred = outputs[:, -1, :].detach().cpu().numpy()  # [B, D]
+                # center timestep prediction for y_hats
+                center = self.win_size // 2
+                last_pred = outputs[:, center, :].detach().cpu().numpy()  # [B, D]
 
                 attens_energy.append(last_score)
                 y_hats.append(last_pred)
