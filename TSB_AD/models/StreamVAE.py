@@ -1,82 +1,27 @@
-# -*- coding: utf-8 -*-
+"""
+STREAM-VAE: Dual-Path Routing for Slow and Fast Dynamics in Vehicle Telemetry Anomaly Detection
+"""
 
-import argparse
+from __future__ import division
+from __future__ import print_function
+
 import copy
 import math
-import os
-import random
-import time
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn.functional as F
 import tqdm
 from torch import nn
 from torch.distributions import Normal, kl_divergence
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-from TSB_AD.evaluation.metrics import get_metrics
-from TSB_AD.models.base import BaseDetector
-from TSB_AD.utils.slidingWindows import find_length_rank
-
-
-def seed_everything(seed=2024, deterministic=True):
-    seed = int(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-    if deterministic:
-        try:
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-        except Exception:
-            pass
-
-        try:
-            torch.use_deterministic_algorithms(True, warn_only=True)
-        except Exception:
-            pass
-
-        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-
-    return seed
+from .base import BaseDetector
+from ..utils.dataset import ReconstructDataset
+from ..utils.torch_utility import get_gpu
 
 
-def get_gpu(cuda=True):
-    if cuda and torch.cuda.is_available():
-        return torch.device("cuda")
-    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-class ReconstructDataset(Dataset):
-    def __init__(self, data, window_size=100):
-        super().__init__()
-        if isinstance(data, torch.Tensor):
-            data = data.detach().cpu().numpy()
-        data = np.asarray(data, dtype=np.float32)
-        if data.ndim == 1:
-            data = data[:, None]
-        self.data = data
-        self.window_size = int(window_size)
-        self.sample_count = max(0, len(self.data) - self.window_size + 1)
-
-    def __len__(self):
-        return self.sample_count
-
-    def __getitem__(self, idx):
-        window = self.data[idx:idx + self.window_size]
-        return torch.from_numpy(window), 0
-
-
-class EarlyStoppingTorch:
+class _EarlyStoppingTorch:
     def __init__(self, patience=10, min_delta=0.0):
         self.patience = int(patience)
         self.min_delta = float(min_delta)
@@ -104,7 +49,7 @@ class EarlyStoppingTorch:
             model.load_state_dict(self.best_state, strict=True)
 
 
-class MultiheadGQA(nn.Module):
+class _MultiheadGQA(nn.Module):
     def __init__(self, d_model, num_heads):
         super().__init__()
         self.num_heads = num_heads
@@ -124,7 +69,7 @@ class MultiheadGQA(nn.Module):
         return self.w_o(out)
 
 
-class LearnableSoftThreshold(nn.Module):
+class _LearnableSoftThreshold(nn.Module):
     def __init__(self, n_feats, init=1.0):
         super().__init__()
         init_value = torch.log(torch.expm1(torch.tensor(init)))
@@ -135,7 +80,7 @@ class LearnableSoftThreshold(nn.Module):
         return torch.sign(x) * F.relu(torch.abs(x) - tau)
 
 
-class LearnableEMA(nn.Module):
+class _LearnableEMA(nn.Module):
     def __init__(self, n_feats, init_alpha=0.9):
         super().__init__()
         logit_alpha = math.log(init_alpha / (1.0 - init_alpha))
@@ -149,12 +94,10 @@ class LearnableEMA(nn.Module):
         outputs = []
         previous = x[:, 0, :]
         outputs.append(previous)
-
         for step in range(1, steps):
             current = alpha.squeeze(1) * previous + one_minus_alpha.squeeze(1) * x[:, step, :]
             outputs.append(current)
             previous = current
-
         return torch.stack(outputs, dim=1)
 
 
@@ -180,12 +123,12 @@ class StreamVAEModel(nn.Module):
         self.proj_z = nn.Linear(self.n_latent, self.n_latent)
         self.proj_enc = nn.Linear(enc_out_dim, self.n_latent)
 
-        self.ema_z = LearnableEMA(self.n_latent, init_alpha=0.9)
-        self.ema_enc = LearnableEMA(self.n_latent, init_alpha=0.9)
+        self.ema_z = _LearnableEMA(self.n_latent, init_alpha=0.9)
+        self.ema_enc = _LearnableEMA(self.n_latent, init_alpha=0.9)
 
         heads = max(2, self.n_latent // 8)
-        self.attn_a = MultiheadGQA(self.n_latent, heads)
-        self.attn_b = MultiheadGQA(self.n_latent, heads)
+        self.attn_a = _MultiheadGQA(self.n_latent, heads)
+        self.attn_b = _MultiheadGQA(self.n_latent, heads)
 
         self.attn_gain = nn.Parameter(torch.zeros(1))
         self.gate_merge = nn.Linear(2, 1)
@@ -209,7 +152,7 @@ class StreamVAEModel(nn.Module):
         self.dec_gate = nn.Linear(self.n_latent, feats * self.K)
 
         self.event_head = nn.Linear(self.n_latent, feats, bias=False)
-        self.event_shrink = LearnableSoftThreshold(feats)
+        self.event_shrink = _LearnableSoftThreshold(feats)
         self.event_gate = nn.Parameter(torch.tensor(-3.0))
         self.ev_gamma = nn.Parameter(torch.zeros(feats))
 
@@ -297,7 +240,12 @@ class StreamVAE(BaseDetector):
                  target_kl=100.0,
                  event_l1_weight=1e-3):
         super().__init__()
-        self.device = get_gpu(True)
+
+        self.__anomaly_score = None
+
+        self.cuda = True
+        self.device = get_gpu(self.cuda)
+
         self.win_size = int(win_size)
         self.batch_size = int(batch_size)
         self.epochs = int(epochs)
@@ -308,39 +256,29 @@ class StreamVAE(BaseDetector):
 
         self.model = StreamVAEModel(feats, latent_dim, 256, self.device).to(self.device)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-5)
-        self.early_stopping = EarlyStoppingTorch(patience=patience)
+        self.early_stopping = _EarlyStoppingTorch(patience=patience)
         self.kl_ema = None
-        self.decision_scores_ = np.empty(0, dtype=np.float32)
 
     def _update_beta(self, current_kl):
         if self.kl_ema is None:
             self.kl_ema = current_kl
         else:
             self.kl_ema = 0.95 * self.kl_ema + 0.05 * current_kl
-
         err = (self.kl_ema - self.target_kl) / (self.target_kl + 1e-8)
         new_beta = self.model.beta * np.exp(0.01 * err)
         self.model.beta = float(np.clip(new_beta, 1e-6, 10.0))
 
-    def fit(self, data, y=None):
-        data = np.asarray(data, dtype=np.float32)
-        split_idx = int((1 - self.validation_size) * len(data))
-        ts_train = data[:split_idx]
-        ts_valid = data[split_idx:]
-
-        train_dataset = ReconstructDataset(ts_train, window_size=self.win_size)
-        if len(train_dataset) == 0:
-            raise ValueError("Training data is shorter than the configured win_size.")
+    def fit(self, data):
+        ts_train = data[:int((1 - self.validation_size) * len(data))]
+        ts_valid = data[int((1 - self.validation_size) * len(data)):]
 
         train_loader = DataLoader(
-            dataset=train_dataset,
+            dataset=ReconstructDataset(ts_train, window_size=self.win_size, normalize=False),
             batch_size=self.batch_size,
             shuffle=True,
         )
-
-        valid_dataset = ReconstructDataset(ts_valid, window_size=self.win_size)
         valid_loader = DataLoader(
-            dataset=valid_dataset,
+            dataset=ReconstructDataset(ts_valid, window_size=self.win_size, normalize=False),
             batch_size=self.batch_size,
             shuffle=False,
         )
@@ -350,14 +288,13 @@ class StreamVAE(BaseDetector):
             avg_loss = 0.0
 
             loop = tqdm.tqdm(enumerate(train_loader), total=len(train_loader), leave=True)
-            for _, (batch, _) in loop:
+            for idx, (batch, _) in loop:
                 batch = batch.to(self.device)
 
                 rec_mu, rec_std, z_mu, z_std, gates, ev_res = self.model(batch)
 
                 dist = Normal(rec_mu, rec_std)
-                log_probs = dist.log_prob(batch).sum(dim=-1).sum(dim=1).mean()
-                nll = -log_probs
+                nll = -dist.log_prob(batch).sum(dim=-1).sum(dim=1).mean()
 
                 posterior = Normal(z_mu, z_std)
                 prior = Normal(torch.zeros_like(z_mu), torch.ones_like(z_std))
@@ -376,7 +313,7 @@ class StreamVAE(BaseDetector):
 
                 self._update_beta(float(kl.item()))
                 avg_loss += float(loss.item())
-                loop.set_description(f"Epoch [{epoch}/{self.epochs}]")
+                loop.set_description(f"Training Epoch [{epoch}/{self.epochs}]")
                 loop.set_postfix(loss=float(loss.item()), beta=self.model.beta, kl=float(kl.item()))
 
             if len(valid_loader) > 0:
@@ -407,20 +344,15 @@ class StreamVAE(BaseDetector):
 
             self.early_stopping(avg_loss, self.model)
             if self.early_stopping.early_stop:
-                print("Early stopping<<<")
+                print("   Early stopping<<<")
                 break
 
         self.early_stopping.restore(self.model)
         return self
 
     def decision_function(self, data):
-        data = np.asarray(data, dtype=np.float32)
-        test_dataset = ReconstructDataset(data, window_size=self.win_size)
-        if len(test_dataset) == 0:
-            raise ValueError("Test data is shorter than the configured win_size.")
-
         test_loader = DataLoader(
-            dataset=test_dataset,
+            dataset=ReconstructDataset(data, window_size=self.win_size, normalize=False),
             batch_size=self.batch_size,
             shuffle=False,
         )
@@ -436,9 +368,10 @@ class StreamVAE(BaseDetector):
                 dist = Normal(rec_mu, rec_std)
                 log_prob = dist.log_prob(batch).sum(dim=-1)
                 score_win = -log_prob.mean(dim=1)
-                scores.append(score_win.detach().to("cpu"))
+                scores.append(score_win.detach().cpu())
 
         anomaly_score = torch.cat(scores, dim=0).numpy()
+
         if anomaly_score.shape[0] < len(data):
             pad_l = math.ceil((self.win_size - 1) / 2)
             pad_r = (self.win_size - 1) // 2
@@ -447,79 +380,10 @@ class StreamVAE(BaseDetector):
             )
 
         self.__anomaly_score = anomaly_score
-        self.decision_scores_ = anomaly_score
         return self.__anomaly_score
 
-    def anomaly_score(self):
+    def anomaly_score(self) -> np.ndarray:
         return self.__anomaly_score
 
-
-def run_StreamVAE_Semisupervised(data_train, data_test, HP):
-    eps = 1e-8
-    data_train = np.asarray(data_train, dtype=np.float64)
-    data_test = np.asarray(data_test, dtype=np.float64)
-
-    seed_everything(2024, deterministic=True)
-    try:
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
-    except Exception:
+    def param_statistic(self, save_file):
         pass
-
-    mu = data_train.mean(axis=0, keepdims=True)
-    sd = data_train.std(axis=0, keepdims=True)
-    sd = np.where(sd == 0, eps, sd)
-
-    data_test_n = (data_test - mu) / sd
-    data_train_n = data_test_n[:len(data_train), :]
-
-    detector = StreamVAE(
-        win_size=HP["win_size"],
-        feats=data_test.shape[1],
-        latent_dim=HP["latent_dim"],
-        batch_size=HP["batch_size"],
-        epochs=HP["epochs"],
-        patience=HP["patience"],
-        lr=HP["lr"],
-        validation_size=HP["validation_size"],
-        target_kl=HP["target_kl"],
-        event_l1_weight=HP["event_l1_weight"],
-    )
-    detector.fit(data_train_n)
-    return detector.decision_function(data_test_n)
-
-
-StreamVAE_HP = {
-    'win_size': 100,
-    'latent_dim': 64,
-    'batch_size': 128,
-    'epochs': 50,
-    'patience': 10,
-    'lr': 1e-3,
-    'validation_size': 0.2,
-    'target_kl': 100.0,
-    'event_l1_weight': 1e-3,
-}
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run StreamVAE in the TSB-AD benchmark format.")
-    parser.add_argument("--filename", type=str, default="057_SMD_id_1_Facility_tr_4529_1st_4629.csv")
-    parser.add_argument("--data_direc", type=str, default="Datasets/TSB-AD-M/")
-    parser.add_argument("--AD_Name", type=str, default="StreamVAE")
-    args = parser.parse_args()
-
-    df = pd.read_csv(os.path.join(args.data_direc, args.filename)).dropna()
-    data = df.iloc[:, 0:-1].values.astype(float)
-    label = df['Label'].astype(int).to_numpy()
-    print('data: ', data.shape)
-    print('label: ', label.shape)
-
-    sliding_window = find_length_rank(data[:, 0].reshape(-1, 1), rank=1)
-    train_index = args.filename.split('.')[0].split('_')[-3]
-    data_train = data[:int(train_index), :]
-
-    output = run_StreamVAE_Semisupervised(data_train, data, StreamVAE_HP)
-
-    evaluation_result = get_metrics(output, label, slidingWindow=sliding_window)
-    print('Evaluation Result: ', evaluation_result)

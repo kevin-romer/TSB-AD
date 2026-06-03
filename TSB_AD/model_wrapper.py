@@ -8,7 +8,7 @@ from .utils.slidingWindows import find_length_rank
 Unsupervise_AD_Pool = ['FFT', 'SR', 'NORMA', 'Series2Graph', 'Sub_IForest', 'IForest', 'LOF', 'Sub_LOF', 'POLY', 'MatrixProfile', 'Sub_PCA', 'PCA', 'HBOS',
                         'Sub_HBOS', 'KNN', 'Sub_KNN','KMeansAD', 'KMeansAD_U', 'KShapeAD', 'COPOD', 'CBLOF', 'COF', 'EIF', 'RobustPCA', 'MMPAD', 'Lag_Llama', 'TimesFM', 'Chronos', 'MOMENT_ZS', 'TSPulse_ZS', 'Time_RCD']
 Semisupervise_AD_Pool = ['Left_STAMPi', 'SAND', 'MCD', 'Sub_MCD', 'OCSVM', 'Sub_OCSVM', 'AutoEncoder', 'CNN', 'LSTMAD', 'TranAD', 'USAD', 'OmniAnomaly', 'PatchTST',
-                        'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD', 'CHARM']
+                        'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD', 'CHARM', 'StreamVAE']
 
 def run_Unsupervise_AD(model_name, data, **kwargs):
     try:
@@ -512,6 +512,25 @@ def run_MMPAD(data, periodicity=1, n_dim=None, n_neighbor=1,
     clf.fit(data)
     score = clf.decision_scores_
     return score.ravel()
+
+def run_StreamVAE(data_train, data_test, win_size=100, latent_dim=64, batch_size=128, epochs=50,
+                  patience=10, lr=1e-3, validation_size=0.2, target_kl=100.0, event_l1_weight=1e-3):
+    from .models.StreamVAE import StreamVAE
+    eps = 1e-8
+    mu = data_train.mean(axis=0, keepdims=True)
+    sd = data_train.std(axis=0, keepdims=True)
+    sd = np.where(sd == 0, eps, sd)
+    data_train_n = (data_train - mu) / sd
+    data_test_n = (data_test - mu) / sd
+    clf = StreamVAE(
+        win_size=win_size, feats=data_test.shape[1], latent_dim=latent_dim,
+        batch_size=batch_size, epochs=epochs, patience=patience, lr=lr,
+        validation_size=validation_size, target_kl=target_kl, event_l1_weight=event_l1_weight,
+    )
+    clf.fit(data_train_n)
+    score = clf.decision_function(data_test_n)
+    return score.ravel()
+
 
 def run_CHARM(
     data_train,
