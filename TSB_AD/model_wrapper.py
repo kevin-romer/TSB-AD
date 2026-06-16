@@ -6,9 +6,9 @@ from sklearn.preprocessing import MinMaxScaler
 from .utils.slidingWindows import find_length_rank
 
 Unsupervise_AD_Pool = ['FFT', 'SR', 'NORMA', 'Series2Graph', 'Sub_IForest', 'IForest', 'LOF', 'Sub_LOF', 'POLY', 'MatrixProfile', 'Sub_PCA', 'PCA', 'HBOS',
-                        'Sub_HBOS', 'KNN', 'Sub_KNN','KMeansAD', 'KMeansAD_U', 'KShapeAD', 'COPOD', 'CBLOF', 'COF', 'EIF', 'RobustPCA', 'MMPAD', 'Lag_Llama', 'TimesFM', 'Chronos', 'MOMENT_ZS', 'TSPulse_ZS', 'Time_RCD']
+                        'Sub_HBOS', 'KNN', 'Sub_KNN','KMeansAD', 'KMeansAD_U', 'KShapeAD', 'COPOD', 'CBLOF', 'COF', 'EIF', 'RobustPCA', 'MMPAD', 'Lag_Llama', 'TimesFM', 'Chronos', 'MOMENT_ZS', 'TSPulse_ZS', 'Time_RCD', 'HSF_U', 'HSF_Causal']
 Semisupervise_AD_Pool = ['Left_STAMPi', 'SAND', 'MCD', 'Sub_MCD', 'OCSVM', 'Sub_OCSVM', 'AutoEncoder', 'CNN', 'LSTMAD', 'TranAD', 'USAD', 'OmniAnomaly', 'PatchTST',
-                        'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD', 'CHARM', 'StreamVAE']
+                        'AnomalyTransformer', 'TimesNet', 'FITS', 'Donut', 'OFA', 'MOMENT_FT', 'M2N2', 'TSPulse_FT', 'xLSTMAD', 'CHARM', 'StreamVAE', 'HSF', 'PaAno_PAI', 'SHADE']
 
 def run_Unsupervise_AD(model_name, data, **kwargs):
     try:
@@ -530,6 +530,27 @@ def run_StreamVAE(data_train, data_test, win_size=100, latent_dim=64, batch_size
     clf.fit(data_train_n)
     score = clf.decision_function(data_test_n)
     return score.ravel()
+
+
+def run_SHADE(data_train, data_test, **kwargs):
+    from .models.SHADE_AD import run_SHADE_AD_Semisupervised
+    return run_SHADE_AD_Semisupervised(data_train, data_test, HP=kwargs).ravel()
+
+def run_PaAno_PAI(data_train, data_test, **kwargs):
+    from .models.PaAno_PAI import run_PaAno_PAI_Semisupervised
+    return run_PaAno_PAI_Semisupervised(data_train, data_test, kwargs).ravel()
+
+def run_HSF(data_train, data_test, **kwargs):
+    from .models.HSF_AD import run_HSF_AD_Semisupervised
+    return run_HSF_AD_Semisupervised(data_train, data_test, HP=kwargs).ravel()
+
+def run_HSF_U(data, **kwargs):
+    from .models.HSF_AD import run_HSF_AD_Unsupervised
+    return run_HSF_AD_Unsupervised(data, HP=kwargs).ravel()
+
+def run_HSF_Causal(data, **kwargs):
+    from .models.HSF_AD import run_HSF_AD_Causal
+    return run_HSF_AD_Causal(data, HP=kwargs).ravel()
 
 
 def run_CHARM(
